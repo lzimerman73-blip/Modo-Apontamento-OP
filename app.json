@@ -49,8 +49,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "361dc7ae-6629-45e0-ae95-c89f0589e3b7"
+        "projectId": "0a55cf2f-fa57-4d40-9ea2-6630717f0e5c"
       }
-    }
+    },
+    "owner": "leandroz"
   }
 }
