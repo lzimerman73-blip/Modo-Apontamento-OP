@@ -9,7 +9,7 @@ import { ModoTheme } from "./src/theme";
 import { StyleSheet, View, KeyboardAvoidingView, Platform } from "react-native";
 import LoginScreen from "./src/screens/LoginScreen";
 import ProducaoScreen from "./src/screens/ProducaoScreen";
-import SetupScreen from "./src/screens/SetupScreen"; // ✨ IMPORTANTE: Importe a nova tela
+import SetupScreen from "./src/screens/SetupScreen";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -17,7 +17,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 const Stack = createStackNavigator();
 
 export default function App() {
-  const [isSetupComplete, setIsSetupComplete] = useState(false); // ✨ Novo estado para o Setup
+  const [isSetupComplete, setIsSetupComplete] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
@@ -25,17 +25,23 @@ export default function App() {
   useEffect(() => {
     const checkInitialState = async () => {
       try {
+        // ✨ CÓDIGO TEMPORÁRIO PARA FORÇAR A HOMOLOGAÇÃO ✨
+        await AsyncStorage.setItem("protheus_url", "http://192.168.88.140:6026/rest");
+        console.log("Forçando URL para: http://192.168.88.140:6026/rest");
+        // ✨ FIM DO CÓDIGO TEMPORÁRIO ✨
+
         // 1. Verifica se o App já foi configurado (tem a URL do Protheus)
         const protheusUrl = await AsyncStorage.getItem("protheus_url");
+
         if (protheusUrl) {
           setIsSetupComplete(true);
 
-          // 2. Se já tem setup, verifica se o usuário já está logado
-          const token = await AsyncStorage.getItem("protheus_access_token");
-          if (token) {
-            setUserToken(token);
-            setIsLoggedIn(true);
-          }
+          // 2. ✨ AJUSTE AQUI: Como o token do Protheus expira, nós apagamos 
+          // qualquer token antigo e garantimos que o usuário não seja logado automaticamente.
+          await AsyncStorage.removeItem("protheus_access_token");
+          setIsLoggedIn(false);
+          setUserToken(null);
+
         } else {
           setIsSetupComplete(false); // Força a ir para a tela de Setup
         }
@@ -49,7 +55,6 @@ export default function App() {
     checkInitialState();
   }, []);
 
-  // ✨ Função chamada quando o Setup é concluído com sucesso
   const handleSetupComplete = () => {
     setIsSetupComplete(true);
   };
@@ -61,28 +66,24 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    // Ao deslogar, mantemos a configuração da empresa (protheus_url)
-    // Removemos apenas as credenciais do usuário.
     await AsyncStorage.removeItem("protheus_access_token");
     setUserToken(null);
     setIsLoggedIn(false);
   };
 
-  // Se você quiser permitir que o usuário mude de fábrica, pode criar essa função
-  // e chamá-la de dentro da ProducaoScreen ou de uma tela de configurações
   const handleResetSetup = async () => {
     await AsyncStorage.removeItem("protheus_url");
     await AsyncStorage.removeItem("empresa_codigo");
     await AsyncStorage.removeItem("empresa_nome");
     await AsyncStorage.removeItem("@empresas_cliente");
-    await handleLogout(); // Garante que também desloga ao trocar de ambiente
+    await handleLogout();
     setIsSetupComplete(false);
   };
 
   if (isLoading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator animating={true} color="#e68900" size="large" />
+        <ActivityIndicator animating={true} color="#00D1A3" size="large" />
       </View>
     );
   }

@@ -7,6 +7,7 @@ import {
   Keyboard,
   TouchableOpacity,
   Dimensions,
+  Image,
 } from "react-native";
 import {
   TextInput,
@@ -19,6 +20,7 @@ import {
   Modal,
   Provider as PaperProvider,
   List,
+  ActivityIndicator,
 } from "react-native-paper";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import api from "../services/api";
@@ -40,6 +42,14 @@ interface DadosOP {
   descricao: string;
   qtdjaprod: string | number;
   saldo: string | number;
+  produtoMP?: string;
+  descricaoMP?: string;
+}
+
+// NOVA INTERFACE: Produto (Matéria-Prima)
+interface ProdutoMP {
+  codpro: string;
+  desc: string;
 }
 
 export default function ProducaoScreen({ onLogout }: any) {
@@ -47,14 +57,25 @@ export default function ProducaoScreen({ onLogout }: any) {
   const [dadosOP, setDadosOP] = useState<DadosOP | null>(null);
   const [loading, setLoading] = useState(false);
   const [tiposMov, setTiposMov] = useState<TipoMovimento[]>([]);
-  const [movSelecionado, setMovSelecionado] = useState<TipoMovimento | null>(
-    null,
-  );
+  const [movSelecionado, setMovSelecionado] = useState<TipoMovimento | null>(null);
+
+  // Estados dos Modais
   const [modalVisible, setModalVisible] = useState(false);
-
   const [scannerVisible, setScannerVisible] = useState(false);
-  const [permission, requestPermission] = useCameraPermissions();
 
+  // Estados da Imagem
+  const [modalImagemVisible, setModalImagemVisible] = useState(false);
+  const [imagemBase64, setImagemBase64] = useState("");
+  const [loadingImg, setLoadingImg] = useState(false);
+
+  // NOVOS ESTADOS: Matéria Prima
+  const [listaMP, setListaMP] = useState<ProdutoMP[]>([]);
+  const [mpSelecionada, setMpSelecionada] = useState<ProdutoMP | null>(null);
+  const [modalMPVisible, setModalMPVisible] = useState(false);
+  const [loadingMP, setLoadingMP] = useState(false);
+  const [buscaMP, setBuscaMP] = useState("");
+
+  const [permission, requestPermission] = useCameraPermissions();
   const [qtdApontar, setQtdApontar] = useState("");
   const [qtdPerda, setQtdPerda] = useState("");
 
@@ -83,14 +104,21 @@ export default function ProducaoScreen({ onLogout }: any) {
 
       setLoading(true);
       setDadosOP(null);
+      setMpSelecionada(null); // Reseta a MP ao buscar nova OP
       try {
-        const resp = await api.get(
-          `/api/getordemproducao?op=${valorBusca.trim()}`,
-        );
+        const resp = await api.get(`/api/getordemproducao?op=${valorBusca.trim()}`);
         if (resp.data?.dadosOP?.length > 0) {
           const operacao = resp.data.dadosOP[0];
           setOp(operacao.numero + operacao.item + operacao.sequencia);
           setDadosOP(operacao);
+
+          // Preenche a MP inicial retornada pela OP (se existir)
+          if (operacao.produtoMP) {
+            setMpSelecionada({
+              codpro: operacao.produtoMP,
+              desc: operacao.descricaoMP || "Descrição indisponível",
+            });
+          }
         } else {
           Alert.alert("Aviso", "OP não encontrada.");
         }
@@ -100,8 +128,61 @@ export default function ProducaoScreen({ onLogout }: any) {
         setLoading(false);
       }
     },
-    [op],
+    [op]
   );
+
+  const buscarImagem = async () => {
+    if (!dadosOP?.produto) return;
+    setLoadingImg(true);
+    setImagemBase64("");
+
+    try {
+      const resp = await api.get(`/api/getimagemproduto?produto=${dadosOP.produto.trim()}`);
+
+      if (resp.data?.imagemBase64) {
+        setImagemBase64(resp.data.imagemBase64);
+        setModalImagemVisible(true);
+      } else {
+        Alert.alert("Aviso", "Desenho não encontrado para este produto.");
+      }
+    } catch (e) {
+      Alert.alert("Erro", "Falha ao buscar a imagem no servidor.");
+    } finally {
+      setLoadingImg(false);
+    }
+  };
+
+  const carregarProdutosMP = async () => {
+    Keyboard.dismiss();
+    setBuscaMP("");
+    if (listaMP.length > 0) {
+      setModalMPVisible(true);
+      return;
+    }
+
+    setLoadingMP(true);
+    try {
+      const resp = await api.get("/api/getprodutos");
+
+      // ✨ ADICIONE ESTA VALIDAÇÃO AQUI ✨
+      let dados = resp.data;
+      if (typeof dados === "string") {
+        dados = JSON.parse(dados); // Converte o texto gigante em objeto
+      }
+
+      if (dados?.produtos) {
+        setListaMP(dados.produtos);
+        setModalMPVisible(true);
+      } else {
+        Alert.alert("Aviso", "Produtos não encontrados no JSON.");
+      }
+    } catch (e: any) {
+      console.error("Erro real na conversão/busca:", e);
+      Alert.alert("Erro", "Detalhe: " + (e.message || "Erro desconhecido"));
+    } finally {
+      setLoadingMP(false);
+    }
+  };
 
   const handleBarCodeScanned = ({ data }: { data: string }) => {
     setScannerVisible(false);
@@ -119,28 +200,17 @@ export default function ProducaoScreen({ onLogout }: any) {
   };
 
   const executarOperacao = async (status: string = "APONTAMENTO") => {
-    // 1. Validação comum para ambos os botões: Precisa ter uma OP carregada
-    if (!dadosOP) {
-      return Alert.alert("Erro", "Busque uma OP antes de prosseguir.");
-    }
+    if (!dadosOP) return Alert.alert("Erro", "Busque uma OP antes de prosseguir.");
 
-    // 2. Validação específica apenas para o APONTAMENTO PADRÃO
     if (status === "APONTAMENTO") {
       if (!movSelecionado || !qtdApontar) {
-        return Alert.alert(
-          "Erro",
-          "Para apontar, preencha o Tipo de Movimento e a Quantidade.",
-        );
+        return Alert.alert("Erro", "Para apontar, preencha o Tipo de Movimento e a Quantidade.");
       }
     }
 
-    // 3. Se chegou aqui, prossegue com a chamada da API
     setLoading(true);
     try {
-      // Tratamento de valores numéricos (envia 0 se estiver vazio no encerramento)
-      const nQtdApontar = qtdApontar
-        ? parseFloat(qtdApontar.replace(",", "."))
-        : 0;
+      const nQtdApontar = qtdApontar ? parseFloat(qtdApontar.replace(",", ".")) : 0;
       const nQtdPerda = qtdPerda ? parseFloat(qtdPerda.replace(",", ".")) : 0;
 
       const response = await api.post("/api/apontaop", {
@@ -150,28 +220,26 @@ export default function ProducaoScreen({ onLogout }: any) {
         quantidade: nQtdApontar,
         qtdPerda: nQtdPerda,
         OpStatus: status,
+        produtoMP: mpSelecionada?.codpro || "",
+        produtoMPAntigo: dadosOP?.produtoMP || "",
       });
 
       if (response.data && response.data.code && response.data.code !== 200) {
-        // Lança erro manualmente para cair no catch abaixo
         throw { response: { data: response.data } };
       }
 
       Alert.alert(
         "Sucesso",
-        status === "ENCERRAMENTO"
-          ? "OP Encerrada com Sucesso!"
-          : "Apontamento Realizado!",
+        status === "ENCERRAMENTO" ? "OP Encerrada com Sucesso!" : "Apontamento Realizado!"
       );
 
-      // Limpa os campos após o sucesso
       setOp("");
       setDadosOP(null);
+      setMpSelecionada(null);
       setQtdApontar("");
       setQtdPerda("");
       setMovSelecionado(null);
     } catch (err: any) {
-      // O catch agora pega tanto erros de rede/HTTP quanto o erro lógico lançado acima
       const msg = err.response?.data?.message || "Falha na operação.";
       Alert.alert("Erro Protheus", msg);
     } finally {
@@ -179,89 +247,149 @@ export default function ProducaoScreen({ onLogout }: any) {
     }
   };
 
+  // Filtro local da lista de MP
+  const listaFiltradaMP = listaMP.filter((p) =>
+    p.desc.toLowerCase().includes(buscaMP.toLowerCase()) ||
+    p.codpro.includes(buscaMP)
+  );
+
   return (
     <PaperProvider>
       <View style={styles.container}>
         <Appbar.Header style={styles.appbar}>
-          <Appbar.Content
-            title="Produção Protheus"
-            titleStyle={styles.appTitle}
-          />
+          <Appbar.Content title="Produção Protheus" titleStyle={styles.appTitle} />
           <Appbar.Action
-            icon={({ size }) => (
-              <MaterialCommunityIcons name="logout" size={size} color="white" />
-            )}
+            icon={({ size }) => <MaterialCommunityIcons name="logout" size={size} color="white" />}
             onPress={onLogout}
           />
         </Appbar.Header>
 
-        {/* Modal do Scanner */}
         <Portal>
+          {/* Modal Visualizar Imagem */}
           <Modal
-            visible={scannerVisible}
-            onDismiss={() => setScannerVisible(false)}
-            contentContainerStyle={styles.scannerModal}
+            visible={modalImagemVisible}
+            onDismiss={() => setModalImagemVisible(false)}
+            contentContainerStyle={styles.modalImagemContent}
           >
-            <Text style={styles.scannerTitle}>
-              Posicione o Código de Barras
-            </Text>
-            <View style={styles.cameraWrapper}>
-              <CameraView
-                style={StyleSheet.absoluteFillObject}
-                onBarcodeScanned={handleBarCodeScanned}
-                barcodeScannerSettings={{
-                  barcodeTypes: ["code128", "ean13", "qr"],
-                }}
-              />
+            <Text style={styles.modalTitle}>Desenho da Forma</Text>
+            <Divider style={styles.divider} />
+
+            <View style={styles.imagemWrapper}>
+              {imagemBase64 ? (
+                <Image
+                  source={{ uri: `data:image/jpeg;base64,${imagemBase64}` }}
+                  style={styles.imagemProduto}
+                  resizeMode="contain"
+                />
+              ) : (
+                <Text>Imagem indisponível.</Text>
+              )}
             </View>
+
             <Button
               mode="contained"
-              onPress={() => setScannerVisible(false)}
-              style={{ marginTop: 15 }}
+              onPress={() => setModalImagemVisible(false)}
+              style={styles.btnVoltar}
+              buttonColor="#255E72"
+            >
+              VOLTAR
+            </Button>
+          </Modal>
+
+          {/* NOVO MODAL: Selecionar Matéria Prima */}
+          <Modal
+            visible={modalMPVisible}
+            onDismiss={() => setModalMPVisible(false)}
+            contentContainerStyle={[styles.modalContent, { maxHeight: SCREEN_HEIGHT * 0.8 }]}
+          >
+            <Text style={styles.modalTitle}>Trocar Matéria-Prima</Text>
+
+            <TextInput
+              label="Buscar por Código ou Descrição"
+              value={buscaMP}
+              onChangeText={setBuscaMP}
+              mode="outlined"
+              style={{ backgroundColor: "white", marginBottom: 10, height: 45 }}
+              left={<TextInput.Icon icon="magnify" />}
+            />
+
+            {loadingMP ? (
+              <ActivityIndicator size="large" color="#255E72" style={{ marginVertical: 20 }} />
+            ) : (
+              <ScrollView keyboardShouldPersistTaps="handled">
+                {listaFiltradaMP.map((p, index) => (
+                  <List.Item
+                    key={index}
+                    title={`${p.codpro} - ${p.desc}`}
+                    titleStyle={{ fontSize: 13, color: "#333" }}
+                    onPress={() => {
+                      setMpSelecionada(p);
+                      setModalMPVisible(false);
+                    }}
+                    style={{ borderBottomWidth: 1, borderBottomColor: "#eee" }}
+                    left={props => <List.Icon {...props} icon="cube-outline" />}
+                  />
+                ))}
+                {listaFiltradaMP.length === 0 && (
+                  <Text style={{ textAlign: "center", marginTop: 20, color: "#888" }}>
+                    Nenhum produto encontrado.
+                  </Text>
+                )}
+              </ScrollView>
+            )}
+
+            <Button
+              mode="contained"
+              onPress={() => setModalMPVisible(false)}
+              style={styles.btnVoltar}
+              buttonColor="#255E72"
             >
               CANCELAR
             </Button>
           </Modal>
-        </Portal>
 
-        {/* Modal de Tipos de Movimento */}
-        <Portal>
+          {/* MODAL: Selecionar Tipo de Movimento */}
           <Modal
             visible={modalVisible}
             onDismiss={hideModal}
             contentContainerStyle={styles.modalContent}
           >
-            <Text style={styles.modalTitle}>Selecione o Tipo de Movimento</Text>
-            <Divider />
-            <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }}>
-              {tiposMov.map((item) => (
-                <View key={item.codigotm}>
-                  <List.Item
-                    title={`${item.codigotm} - ${item.textotm}`}
-                    onPress={() => {
-                      setMovSelecionado(item);
-                      hideModal();
-                    }}
-                  />
-                  <Divider />
-                </View>
+            <Text style={styles.modalTitle}>Tipo de Movimento</Text>
+
+            <ScrollView keyboardShouldPersistTaps="handled">
+              {tiposMov.map((tm, index) => (
+                <List.Item
+                  key={index}
+                  title={`${tm.codigotm} - ${tm.textotm}`}
+                  titleStyle={{ fontSize: 14, color: "#333", fontWeight: "bold" }}
+                  onPress={() => {
+                    setMovSelecionado(tm);
+                    hideModal();
+                  }}
+                  style={{ borderBottomWidth: 1, borderBottomColor: "#eee" }}
+                  left={props => <List.Icon {...props} icon="swap-horizontal" color="#255E72" />}
+                />
               ))}
+              {tiposMov.length === 0 && (
+                <Text style={{ textAlign: "center", marginTop: 20, color: "#888" }}>
+                  Nenhum movimento carregado.
+                </Text>
+              )}
             </ScrollView>
+
             <Button
-              onPress={hideModal}
               mode="contained"
-              buttonColor="#666"
-              style={{ marginTop: 15 }}
+              onPress={hideModal}
+              style={styles.btnVoltar}
+              buttonColor="#255E72"
             >
-              FECHAR
+              CANCELAR
             </Button>
           </Modal>
+
         </Portal>
 
-        <ScrollView
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
-        >
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Card style={styles.cardBusca}>
             <Card.Content>
               <TextInput
@@ -269,13 +397,7 @@ export default function ProducaoScreen({ onLogout }: any) {
                 value={op}
                 onChangeText={setOp}
                 mode="outlined"
-                right={
-                  <TextInput.Icon
-                    icon="barcode-scan"
-                    onPress={abrirScanner}
-                    color="#255E72"
-                  />
-                }
+                right={<TextInput.Icon icon="barcode-scan" onPress={abrirScanner} color="#255E72" />}
               />
               <Button
                 mode="contained"
@@ -292,48 +414,60 @@ export default function ProducaoScreen({ onLogout }: any) {
           {dadosOP && (
             <Card style={styles.cardDados}>
               <Card.Content>
-                <Text style={styles.produtoTexto}>
-                  OP: {dadosOP.numero} / Item: {dadosOP.item} / Seq:{" "}
-                  {dadosOP.sequencia}
-                </Text>
-                <Text style={styles.produtoDesc}>
-                  {dadosOP.produto} - {dadosOP.descricao}
-                </Text>
+                <View style={styles.headerProduto}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.produtoTexto}>
+                      OP: {dadosOP.numero} / Item: {dadosOP.item} / Seq: {dadosOP.sequencia}
+                    </Text>
+                    <Text style={styles.produtoDesc}>
+                      {dadosOP.produto} - {dadosOP.descricao}
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.btnIconeImagem}
+                    onPress={buscarImagem}
+                    disabled={loadingImg}
+                  >
+                    {loadingImg ? (
+                      <ActivityIndicator size="small" color="#255E72" />
+                    ) : (
+                      <MaterialCommunityIcons name="image-search" size={28} color="#255E72" />
+                    )}
+                    <Text style={styles.textBtnImagem}>Desenho</Text>
+                  </TouchableOpacity>
+                </View>
 
                 <Divider style={styles.divider} />
 
-                {/* --- CAMPOS RESTAURADOS: JÁ PROD E SALDO --- */}
                 <View style={styles.rowInfo}>
                   <Text style={styles.labelInfo}>
-                    Já Prod:{" "}
-                    <Text style={styles.valorInfo}>{dadosOP.qtdjaprod}</Text>
+                    Já Prod: <Text style={styles.valorInfo}>{dadosOP.qtdjaprod}</Text>
                   </Text>
                   <Text style={styles.labelInfo}>
-                    Saldo:{" "}
-                    <Text style={[styles.valorInfo, { color: "red" }]}>
-                      {dadosOP.saldo}
-                    </Text>
+                    Saldo: <Text style={[styles.valorInfo, { color: "red" }]}>{dadosOP.saldo}</Text>
                   </Text>
                 </View>
-                {/* ------------------------------------------ */}
 
                 <Divider style={styles.divider} />
 
-                <Text style={styles.labelCampo}>Tipo de Movimento:</Text>
-                <TouchableOpacity
-                  onPress={showModal}
-                  style={styles.selectorOpener}
-                >
+                {/* NOVO CAMPO: Matéria-Prima Empenhada */}
+                <Text style={styles.labelCampo}>Matéria-Prima Empenhada:</Text>
+                <TouchableOpacity onPress={carregarProdutosMP} style={styles.selectorOpener}>
                   <Text style={styles.selectorText}>
-                    {movSelecionado
-                      ? `${movSelecionado.codigotm} - ${movSelecionado.textotm}`
-                      : "Toque para selecionar..."}
+                    {mpSelecionada
+                      ? `${mpSelecionada.codpro} - ${mpSelecionada.desc}`
+                      : "Carregando / Nenhuma MP vinculada"}
                   </Text>
-                  <MaterialCommunityIcons
-                    name="chevron-down"
-                    size={24}
-                    color="#666"
-                  />
+                  <MaterialCommunityIcons name="swap-horizontal" size={24} color="#666" />
+                </TouchableOpacity>
+
+                <Text style={styles.labelCampo}>Tipo de Movimento:</Text>
+                <TouchableOpacity onPress={showModal} style={styles.selectorOpener}>
+                  <Text style={styles.selectorText}>
+                    {movSelecionado ? `${movSelecionado.codigotm} - ${movSelecionado.textotm}` : "Toque para selecionar..."}
+                  </Text>
+                  <MaterialCommunityIcons name="chevron-down" size={24} color="#666" />
                 </TouchableOpacity>
 
                 <View style={styles.rowInputs}>
@@ -375,7 +509,7 @@ export default function ProducaoScreen({ onLogout }: any) {
                   style={[styles.btnConfirmar, { marginTop: 12 }]}
                   labelStyle={styles.btnLabel}
                 >
-                  ENCERRAR OP
+                  ENCERRAR OP PROD. PARCIAL
                 </Button>
               </Card.Content>
             </Card>
@@ -434,24 +568,49 @@ const styles = StyleSheet.create({
   inputForm: { backgroundColor: "white", height: 50 },
   btnConfirmar: { marginTop: 5, borderRadius: 8 },
   btnLabel: { fontWeight: "bold" },
-  scannerModal: {
+  headerProduto: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  btnIconeImagem: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 5,
+    marginLeft: 10,
+    backgroundColor: "#eef2f5",
+    borderRadius: 8,
+    minWidth: 60,
+  },
+  textBtnImagem: {
+    fontSize: 10,
+    color: "#255E72",
+    fontWeight: "bold",
+    marginTop: 2,
+  },
+  modalImagemContent: {
     backgroundColor: "white",
     padding: 20,
     margin: 20,
     borderRadius: 12,
     alignItems: "center",
   },
-  scannerTitle: {
-    fontSize: 16,
-    fontWeight: "bold",
-    marginBottom: 15,
-    color: "#255E72",
+  imagemWrapper: {
+    width: "100%",
+    height: 300,
+    justifyContent: "center",
+    alignItems: "center",
+    marginVertical: 10,
+    backgroundColor: "#f5f5f5",
+    borderRadius: 8,
   },
-  cameraWrapper: {
-    width: 280,
-    height: 280,
-    overflow: "hidden",
-    borderRadius: 10,
-    backgroundColor: "#000",
+  imagemProduto: {
+    width: "100%",
+    height: "100%",
+  },
+  btnVoltar: {
+    marginTop: 10,
+    width: "100%",
+    borderRadius: 8,
   },
 });

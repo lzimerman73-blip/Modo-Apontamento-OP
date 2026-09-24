@@ -128,9 +128,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               {loading ? "Autenticando..." : "Entrar"}
             </Button>
 
-            <Button mode="text" onPress={limparEForcarSetup} textColor="red">
-              Zerar Configurações (Apenas Dev)
-            </Button>
+
+            {/*<Button mode="text" onPress={limparEForcarSetup} textColor="red">
+              Limpar Configurações
+            </Button>*/}
 
           </View>
         </View>
